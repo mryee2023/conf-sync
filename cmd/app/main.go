@@ -5,12 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/mryee2023/conf-sync/internal/gist"
 	"github.com/mryee2023/conf-sync/internal/logger"
+	"github.com/mryee2023/conf-sync/internal/config"
 )
 
 var (
@@ -18,6 +18,7 @@ var (
 	watchInterval time.Duration
 	execCommand string
 	logLevel string
+	configFile string
 )
 
 const (
@@ -120,7 +121,7 @@ func main() {
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			level, err := logger.ParseLevel(logLevel)
 			if err != nil {
-				logger.Fatal("Invalid log level: %v", err)
+				logger.Fatal("%v", err)
 			}
 			logger.SetLevel(level)
 			
@@ -132,13 +133,50 @@ func main() {
 
 	rootCmd.PersistentFlags().StringVarP(&gistID, "gist-id", "g", "", "Gist ID")
 	rootCmd.PersistentFlags().StringVarP(&logLevel, "log-level", "l", "info", "Log level (debug, info, warn, error)")
-	rootCmd.MarkPersistentFlagRequired("gist-id")
 
+	var cmdClient = &cobra.Command{
+		Use:   "client",
+		Short: "Run in client mode",
+		Run: func(cmd *cobra.Command, args []string) {
+			cfg, err := config.LoadClientConfig(configFile)
+			if err != nil {
+				logger.Fatal("Failed to load config: %v", err)
+			}
+
+			interval, err := cfg.GetCheckInterval()
+			if err != nil {
+				logger.Fatal("Invalid check interval: %v", err)
+			}
+
+			client := gist.NewClient(os.Getenv(envGistToken), cfg.GistID)
+			var mappings []FileMapping
+			for _, m := range cfg.Mappings {
+				mappings = append(mappings, FileMapping{
+					GistFile:  m.GistFile,
+					LocalFile: m.LocalPath,
+				})
+				if m.Exec != "" {
+					logger.Info("Will execute '%s' after updating %s", m.Exec, m.LocalPath)
+				}
+			}
+
+			logger.Info("Starting client mode with %d file mappings", len(mappings))
+			logger.Info("Check interval: %v", interval)
+			watchInterval = interval
+			watchFiles(client, mappings)
+		},
+	}
+	cmdClient.Flags().StringVarP(&configFile, "config", "c", "/etc/conf-sync/client.yaml", "Path to client config file")
+
+	// Server mode commands
 	var cmdUpload = &cobra.Command{
 		Use:   "upload [files...]",
-		Short: "Upload files to Gist",
+		Short: "Upload files to Gist (server mode)",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			if gistID == "" {
+				logger.Fatal("Gist ID is required in server mode")
+			}
 			client := gist.NewClient(os.Getenv(envGistToken), gistID)
 			files := make(map[string][]byte)
 			for _, file := range args {
@@ -156,48 +194,17 @@ func main() {
 		},
 	}
 
-	var cmdWatch = &cobra.Command{
-		Use:   "watch [gist_file:local_path...]",
-		Short: "Watch for Gist changes and update local files",
-		Long: `Watch for changes in Gist files and update corresponding local files.
-Example: conf-sync watch db.conf:/etc/myapp/db.conf config.yaml:/etc/myapp/config.yaml
-
-The -i/--interval flag can be used to set the check interval (default: 10s).
-Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
-
-The -e/--exec flag can be used to specify a command to execute after files are updated:
-Example: conf-sync watch -e "docker restart myapp" db.conf:/etc/myapp/db.conf`,
-		Args: cobra.MinimumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			client := gist.NewClient(os.Getenv(envGistToken), gistID)
-			var mappings []FileMapping
-			for _, arg := range args {
-				parts := strings.SplitN(arg, ":", 2)
-				if len(parts) != 2 {
-					logger.Fatal("Invalid mapping format: %s", arg)
-				}
-				gistFile := parts[0]
-				localFile := parts[1]
-				mappings = append(mappings, FileMapping{
-					GistFile:  gistFile,
-					LocalFile: localFile,
-				})
-			}
-			watchFiles(client, mappings)
-		},
-	}
-	cmdWatch.Flags().DurationVarP(&watchInterval, "interval", "i", 10*time.Second, "Check interval for file changes")
-	cmdWatch.Flags().StringVarP(&execCommand, "exec", "e", "", "Command to execute after files are updated")
-
 	var cmdList = &cobra.Command{
 		Use:   "list",
-		Short: "List files in Gist",
+		Short: "List files in Gist (server mode)",
 		Run: func(cmd *cobra.Command, args []string) {
+			if gistID == "" {
+				logger.Fatal("Gist ID is required in server mode")
+			}
 			client := gist.NewClient(os.Getenv(envGistToken), gistID)
 			files, err := client.DownloadFiles()
 			if err != nil {
-				logger.Errorf("Error getting files: %v", err)
-				os.Exit(1)
+				logger.Fatal("%v", err)
 			}
 			logger.Info("Files in Gist:")
 			for name, content := range files {
@@ -210,52 +217,18 @@ Example: conf-sync watch -e "docker restart myapp" db.conf:/etc/myapp/db.conf`,
 		},
 	}
 
-	var cmdSync = &cobra.Command{
-		Use:   "sync [files...]",
-		Short: "Sync files from Gist",
-		Run: func(cmd *cobra.Command, args []string) {
-			client := gist.NewClient(os.Getenv(envGistToken), gistID)
-			files, err := client.DownloadFiles()
-			if err != nil {
-				logger.Errorf("Error getting files: %v", err)
-				os.Exit(1)
-			}
-
-			for filename, content := range files {
-				if content.IsDeleted {
-					logger.Info("File %s has been deleted from gist", filename)
-					continue
-				}
-				if len(args) > 0 {
-					found := false
-					for _, arg := range args {
-						if filepath.Base(arg) == filename {
-							found = true
-							break
-						}
-					}
-					if !found {
-						continue
-					}
-				}
-				if err := writeFile(filename, content.Content); err != nil {
-					logger.Errorf("Error writing %s: %v", filename, err)
-					continue
-				}
-				logger.Info("Synced %s", filename)
-			}
-		},
-	}
-
 	var cmdDelete = &cobra.Command{
 		Use:   "delete [files...]",
-		Short: "Delete files from Gist",
+		Short: "Delete files from Gist (server mode)",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			if gistID == "" {
+				logger.Fatal("Gist ID is required in server mode")
+			}
 			client := gist.NewClient(os.Getenv(envGistToken), gistID)
 			for _, file := range args {
 				if err := client.DeleteFile(filepath.Base(file)); err != nil {
-					logger.Errorf("Error deleting %s: %v", file, err)
+					logger.Error("Error deleting %s: %v", file, err)
 					continue
 				}
 				logger.Info("Deleted %s", file)
@@ -263,11 +236,12 @@ Example: conf-sync watch -e "docker restart myapp" db.conf:/etc/myapp/db.conf`,
 		},
 	}
 
-	rootCmd.AddCommand(cmdUpload, cmdWatch, cmdList, cmdSync, cmdDelete)
+	// Add commands
+	rootCmd.AddCommand(cmdClient)
+	rootCmd.AddCommand(cmdUpload, cmdList, cmdDelete)
 
 	if err := rootCmd.Execute(); err != nil {
-		logger.Errorf("%v", err)
-		os.Exit(1)
+		logger.Fatal("%v", err)
 	}
 }
 

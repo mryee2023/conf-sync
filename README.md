@@ -1,162 +1,124 @@
-# Conf Sync
+# conf-sync
 
-A standard Go project structure created on 2025-01-17, modified to be a command-line tool for synchronizing configuration files with GitHub Gist. Built with Go, this tool allows you to easily upload, download, and monitor changes in your configuration files through Gist.
+A tool for synchronizing configuration files across multiple servers using GitHub Gist.
 
-## Project Structure
+## Overview
+
+conf-sync is designed to manage configuration files across multiple servers:
+- A central server (server mode) manages and updates the configurations
+- Multiple client servers (client mode) automatically sync and apply the configuration changes
 
 ```
-.
-├── api/        # API protocols and swagger/OpenAPI specs
-├── cmd/        # Main applications
-├── configs/    # Configuration files
-├── docs/       # Documentation
-├── internal/   # Private application and library code
-├── pkg/        # Public library code
-└── test/       # Additional test applications and test data
+                                      ┌─────────────┐
+                                      │  GitHub     │
+                                      │   Gist      │
+                                      └─────▲─────┬─┘
+                                            │     │
+                                     Upload │     │ Sync
+                                            │     │
+                                            │     ▼
+┌─────────────┐                      ┌─────┴─────────┐
+│  Client B   │◄────Sync───────────►│   Server A    │
+└─────────────┘                      └───────────────┘
+                                            ▲
+                                            │
+                                            │ Sync
+                                            │
+                                     ┌──────┴────────┐
+                                     │   Client C    │
+                                     └───────────────┘
 ```
 
-## Getting Started
+### Architecture
 
-To run the application:
+1. **Server Node (A)**:
+   - Manages configuration files
+   - Uploads changes to GitHub Gist
+   - Acts as the single source of truth
 
-```bash
-go run cmd/app/main.go
-```
+2. **Client Nodes (B, C)**:
+   - Run conf-sync as a systemd service
+   - Automatically sync from GitHub Gist
+   - Execute commands after file updates (e.g., restart services)
 
-## Requirements
-
-- Go 1.21 or higher
-
-## Features
-
-- Upload multiple configuration files to Gist
-- Sync configuration files from Gist to local
-- Watch for changes in Gist files
-- List all files in a Gist
-- Delete files from Gist
-- Support for environment variables
-- Real-time file monitoring
-- Execute commands after file updates (e.g., restart services)
-- Support for multiple files synchronization
-- Secure token-based authentication
+3. **GitHub Gist**:
+   - Acts as the central configuration store
+   - Provides version history
+   - Secure access via tokens
 
 ## Installation
 
-### Quick Install (From Release)
-
-#### macOS
+### Server Installation
 ```bash
-# For Intel Mac
-curl -L https://github.com/mryee2023/conf-sync/releases/latest/download/conf-sync-darwin-amd64 -o conf-sync
-
-# For Apple Silicon Mac
-curl -L https://github.com/mryee2023/conf-sync/releases/latest/download/conf-sync-darwin-arm64 -o conf-sync
-
-# Make it executable
-chmod +x conf-sync
-sudo mv conf-sync /usr/local/bin/
+# Just copy the binary
+cp build/conf-sync /usr/local/bin/
+chmod +x /usr/local/bin/conf-sync
 ```
 
-#### Linux
+### Client Installation
 ```bash
-# For x64
-curl -L https://github.com/mryee2023/conf-sync/releases/latest/download/conf-sync-linux-amd64 -o conf-sync
+# Run the install script as root
+sudo ./scripts/install.sh
 
-# For ARM64
-curl -L https://github.com/mryee2023/conf-sync/releases/latest/download/conf-sync-linux-arm64 -o conf-sync
+# Edit the configuration
+sudo vi /etc/conf-sync/client.yaml
 
-# Make it executable
-chmod +x conf-sync
-sudo mv conf-sync /usr/local/bin/
-```
+# Edit the service file to set your GitHub token
+sudo vi /etc/systemd/system/conf-sync.service
 
-#### Windows
-Download the appropriate file from the [releases page](https://github.com/mryee2023/conf-sync/releases/latest):
-- Windows x64: `conf-sync-windows-amd64.exe`
-- Windows ARM64: `conf-sync-windows-arm64.exe`
-
-### From Source
-
-1. Clone the repository:
-```bash
-git clone https://github.com/mryee2023/conf-sync.git
-cd conf-sync
-```
-
-2. Build for your platform:
-```bash
-# Build for current platform
-make build
-
-# Or build for all supported platforms
-make build-all
-
-# Or install directly to your $GOPATH/bin
-make install
-```
-
-The built binaries will be available in the `build` directory:
-- macOS (Intel): `build/conf-sync-darwin-amd64`
-- macOS (Apple Silicon): `build/conf-sync-darwin-arm64`
-- Linux (x64): `build/conf-sync-linux-amd64`
-- Linux (ARM64): `build/conf-sync-linux-arm64`
-- Windows (x64): `build/conf-sync-windows-amd64.exe`
-- Windows (ARM64): `build/conf-sync-windows-arm64.exe`
-
-### Using Go Install
-
-```bash
-go install github.com/mryee2023/conf-sync/cmd/app@latest
-```
-
-## Configuration
-
-The tool requires a GitHub Personal Access Token with `gist` scope. You can create one at [GitHub Settings](https://github.com/settings/tokens).
-
-Set your GitHub token as an environment variable:
-```bash
-export GIST_TOKEN="your-github-token"
+# Start the service
+sudo systemctl enable conf-sync
+sudo systemctl start conf-sync
 ```
 
 ## Usage
 
-### Basic Commands
+### Server Mode
 
-1. Upload multiple configuration files to Gist:
+The server mode is used to manage configurations:
+
 ```bash
-./conf-sync -g YOUR_GIST_ID upload config.json .env
+# Upload configuration files
+conf-sync -g YOUR_GIST_ID upload /path/to/config1.yaml /path/to/config2.conf
+
+# List files in Gist
+conf-sync -g YOUR_GIST_ID list
+
+# Delete files from Gist
+conf-sync -g YOUR_GIST_ID delete old-config.json
 ```
 
-2. List all files in your Gist:
-```bash
-./conf-sync -g YOUR_GIST_ID list
+### Client Mode
+
+Clients run as a service, automatically syncing configurations from the Gist:
+
+1. Edit `/etc/conf-sync/client.yaml`:
+```yaml
+gist_id: "YOUR_GIST_ID"
+check_interval: "30s"
+mappings:
+  - gist_file: "db.conf"
+    local_path: "/etc/myapp/db.conf"
+    exec: "docker restart myapp"
+  - gist_file: "app.yaml"
+    local_path: "/etc/myapp/config.yaml"
+    exec: "systemctl restart myapp"
 ```
 
-3. Sync specific files from Gist:
+2. Run the client:
 ```bash
-./conf-sync -g YOUR_GIST_ID sync config.json
-# Or sync all files
-./conf-sync -g YOUR_GIST_ID sync
-```
+# Run manually
+conf-sync client --config /etc/conf-sync/client.yaml
 
-4. Watch files for changes:
-```bash
-./conf-sync -g YOUR_GIST_ID watch config.json
-# Or watch all files
-./conf-sync -g YOUR_GIST_ID watch
-```
-
-5. Delete files from Gist:
-```bash
-./conf-sync -g YOUR_GIST_ID delete old-config.json
+# Or use systemd
+sudo systemctl start conf-sync
 ```
 
 ### Command Line Options
 
-- `-g, --gist-id`: (Required) The ID of your Gist
+- `-g, --gist-id`: (Required for server mode) The ID of your Gist
 - `-l, --log-level`: Set log level (debug, info, warn, error, default: info)
-- `-i, --interval`: Set check interval for watch command (default: 10s)
-- `-e, --exec`: Execute command after files are updated
+- `-c, --config`: Path to client config file (default: /etc/conf-sync/client.yaml)
 
 ### Log Levels
 
@@ -166,101 +128,45 @@ The following log levels are supported:
 - `warn`: Show only warning and error messages
 - `error`: Show only error messages
 
-Example:
-```bash
-# Show detailed debug information
-conf-sync -g YOUR_GIST_ID -l debug watch db.conf:/etc/myapp/db.conf
+### Client Configuration
 
-# Only show errors
-conf-sync -g YOUR_GIST_ID -l error watch db.conf:/etc/myapp/db.conf
+The client configuration file (`client.yaml`) supports:
+
+- `gist_id`: The ID of the Gist to sync from
+- `check_interval`: How often to check for updates (e.g., "30s", "1m", "5m")
+- `mappings`: List of file mappings
+  - `gist_file`: Name of the file in Gist
+  - `local_path`: Where to save the file locally
+  - `exec`: (Optional) Command to run after file is updated
+
+### Environment Variables
+
+- `GIST_TOKEN`: GitHub personal access token with Gist access (required)
+
+## Security
+
+- The GitHub token should have minimal permissions (just Gist access)
+- Client configuration files are created with 600 permissions
+- The service runs as root to allow writing to protected directories
+
+## Troubleshooting
+
+1. Check the service status:
+```bash
+systemctl status conf-sync
 ```
 
-### Time Units
-
-The following time units are supported for the `-i/--interval` flag:
-- `ns` (nanoseconds)
-- `us` or `µs` (microseconds)
-- `ms` (milliseconds)
-- `s` (seconds)
-- `m` (minutes)
-- `h` (hours)
-
-## Examples
-
-1. Upload multiple configuration files:
+2. View logs:
 ```bash
-./conf-sync -g YOUR_GIST_ID upload app.yaml db.conf .env
+# View service logs
+journalctl -u conf-sync
+
+# Run with debug logging
+conf-sync -l debug client
 ```
 
-2. Sync all configuration files from Gist:
-```bash
-./conf-sync -g YOUR_GIST_ID sync
-```
-
-3. Watch specific configuration files for changes:
-```bash
-./conf-sync -g YOUR_GIST_ID watch config.json app.yaml
-```
-
-4. List all files with their status:
-```bash
-./conf-sync -g YOUR_GIST_ID list
-```
-
-5. Delete multiple files:
-```bash
-./conf-sync -g YOUR_GIST_ID delete old-config.json backup.yaml
-```
-
-## Development
-
-### Build Options
-
-The project includes a Makefile with several useful targets:
-
-- `make build` - Build for current platform
-- `make build-all` - Build for all supported platforms
-- `make clean` - Clean build directory
-- `make test` - Run tests
-- `make install` - Install locally to $GOPATH/bin
-
-You can specify a version when building:
-```bash
-make VERSION=1.2.0 build-all
-```
-
-### Release Process
-
-To create a new release:
-
-1. Create and push a new tag:
-```bash
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
-```
-
-2. GitHub Actions will automatically:
-   - Build binaries for all supported platforms
-   - Create a new release with the binaries
-   - Generate release notes
-
-### Supported Platforms
-
-- darwin/amd64 (macOS Intel)
-- darwin/arm64 (macOS Apple Silicon)
-- linux/amd64 (Linux x64)
-- linux/arm64 (Linux ARM64)
-- windows/amd64 (Windows x64)
-- windows/arm64 (Windows ARM64)
-
-## Notes
-
-- The watch command checks for changes every 10 seconds
-- File operations are atomic - if one file fails, others will still be processed
-- The tool uses the base filename when uploading to Gist
-- Deleted files in Gist will be marked as deleted in the list command
-- Be careful with sensitive information in your configuration files
-
-## License
-
-MIT License
+3. Common issues:
+- Ensure GIST_TOKEN is set correctly
+- Check file permissions
+- Verify the Gist ID is correct
+- Ensure the service has network access

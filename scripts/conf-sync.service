@@ -1,0 +1,14 @@
+[Unit]
+Description=Configuration Synchronization Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=GIST_TOKEN=your-github-token
+ExecStart=/usr/local/bin/conf-sync client --config /etc/conf-sync/client.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
