@@ -5,8 +5,9 @@ A tool for synchronizing configuration files across multiple servers using GitHu
 ## Overview
 
 conf-sync is designed to manage configuration files across multiple servers:
-- A central server (server mode) manages and updates the configurations
+- A central server (server mode) manages and updates the configurations using GitHub Gist
 - Multiple client servers (client mode) automatically sync and apply the configuration changes
+- Only the server needs GitHub access; clients only need the Gist ID
 
 ```
                                       ┌─────────────┐
@@ -14,16 +15,16 @@ conf-sync is designed to manage configuration files across multiple servers:
                                       │   Gist      │
                                       └─────▲─────┬─┘
                                             │     │
-                                     Upload │     │ Sync
-                                            │     │
+                                     Upload │     │ Read
+                                     (token)│     │ (public)
                                             │     ▼
 ┌─────────────┐                      ┌─────┴─────────┐
-│  Client B   │◄────Sync───────────►│   Server A    │
-└─────────────┘                      └───────────────┘
+│  Client B   │◄────Read Gist───────│   Server A    │
+└─────────────┘      (public)        └───────────────┘
                                             ▲
                                             │
-                                            │ Sync
-                                            │
+                                            │ Read Gist
+                                            │ (public)
                                      ┌──────┴────────┐
                                      │   Client C    │
                                      └───────────────┘
@@ -33,18 +34,21 @@ conf-sync is designed to manage configuration files across multiple servers:
 
 1. **Server Node (A)**:
    - Manages configuration files
+   - Requires GitHub token for Gist access
    - Uploads changes to GitHub Gist
    - Acts as the single source of truth
 
 2. **Client Nodes (B, C)**:
    - Run conf-sync as a systemd service
+   - Only need Gist ID (no GitHub token required)
    - Automatically sync from GitHub Gist
    - Execute commands after file updates (e.g., restart services)
 
 3. **GitHub Gist**:
    - Acts as the central configuration store
    - Provides version history
-   - Secure access via tokens
+   - Server writes using token
+   - Clients read public Gist
 
 ## Installation
 
@@ -53,23 +57,30 @@ conf-sync is designed to manage configuration files across multiple servers:
 # Just copy the binary
 cp build/conf-sync /usr/local/bin/
 chmod +x /usr/local/bin/conf-sync
+
+# Set GitHub token
+export GIST_TOKEN="your-github-token"
 ```
 
 ### Client Installation
 ```bash
-# Run the install script as root
-sudo ./scripts/install.sh
+# Download and run the install script
+curl -L https://raw.githubusercontent.com/mryee2023/conf-sync/main/scripts/install.sh | sudo bash
 
 # Edit the configuration
 sudo vi /etc/conf-sync/client.yaml
-
-# Edit the service file to set your GitHub token
-sudo vi /etc/systemd/system/conf-sync.service
 
 # Start the service
 sudo systemctl enable conf-sync
 sudo systemctl start conf-sync
 ```
+
+The install script will:
+1. Detect your system architecture
+2. Download the appropriate binary
+3. Create systemd service
+4. Create default configuration
+5. Set proper permissions
 
 ## Usage
 
