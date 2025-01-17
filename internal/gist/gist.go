@@ -3,14 +3,24 @@ package gist
 import (
 	"context"
 	"time"
+	"net/http"
 
 	"github.com/google/go-github/v57/github"
 	"golang.org/x/oauth2"
 )
 
+// RateLimits defines the minimum intervals between requests
+const (
+	MinIntervalAuth    = 1 * time.Second  // For authenticated requests (5000/hour)
+	MinIntervalUnauth  = 60 * time.Second // For unauthenticated requests (60/hour)
+	BackoffMultiplier  = 2                // Multiply interval by this when rate limited
+	MaxBackoffInterval = 15 * time.Minute // Maximum backoff interval
+)
+
 type Client struct {
 	client *github.Client
 	gistID string
+	authenticated bool
 }
 
 // NewClient creates a new client with write access (requires token)
@@ -25,6 +35,7 @@ func NewClient(token, gistID string) *Client {
 	return &Client{
 		client: client,
 		gistID: gistID,
+		authenticated: true,
 	}
 }
 
@@ -33,6 +44,7 @@ func NewReadOnlyClient(gistID string) *Client {
 	return &Client{
 		client: github.NewClient(nil),
 		gistID: gistID,
+		authenticated: false,
 	}
 }
 
@@ -105,4 +117,26 @@ func (c *Client) DeleteFile(filename string) error {
 	}
 	_, _, err := c.client.Gists.Edit(context.Background(), c.gistID, gist)
 	return err
+}
+
+// GetMinInterval returns the minimum recommended interval between requests
+func (c *Client) GetMinInterval() time.Duration {
+	if c.authenticated {
+		return MinIntervalAuth
+	}
+	return MinIntervalUnauth
+}
+
+// IsRateLimited checks if the error is a rate limit error
+func (c *Client) IsRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	if _, ok := err.(*github.RateLimitError); ok {
+		return true
+	}
+	if errResp, ok := err.(*github.ErrorResponse); ok {
+		return errResp.Response.StatusCode == http.StatusTooManyRequests
+	}
+	return false
 }

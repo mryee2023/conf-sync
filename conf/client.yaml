@@ -1,10 +1,7 @@
 # Client configuration for conf-sync
-gist_id: "YOUR_GIST_ID"
-check_interval: "30s"
+gist_id: "YOUR_GIST_ID"  # Replace with your Gist ID
+check_interval: "60s"    # Minimum interval is 60s for unauthenticated requests
 mappings:
-  - gist_file: "db.conf"
-    local_path: "/etc/myapp/db.conf"
-    exec: "docker restart myapp"
-  - gist_file: "app.yaml"
-    local_path: "/etc/myapp/config.yaml"
+  - gist_file: "app.conf"
+    local_path: "/etc/myapp/app.conf"
     exec: "systemctl restart myapp"

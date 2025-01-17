@@ -46,14 +46,35 @@ func executeCommand(cmd string) error {
 
 func watchFiles(client *gist.Client, mappings []FileMapping) {
 	logger.Info("Starting file watcher...")
+	currentInterval := client.GetMinInterval() // Start with minimum interval
+
 	for {
 		logger.Debug("Checking for updates at %v...", time.Now().UTC())
 		files, err := client.DownloadFiles()
 		if err != nil {
-			logger.Error("Failed to download files: %v", err)
-			time.Sleep(watchInterval)
+			if client.IsRateLimited(err) {
+				// Increase interval on rate limit, but cap it
+				currentInterval = time.Duration(float64(currentInterval) * gist.BackoffMultiplier)
+				if currentInterval > gist.MaxBackoffInterval {
+					currentInterval = gist.MaxBackoffInterval
+				}
+				logger.Warn("Rate limited. Increasing check interval to %v", currentInterval)
+			} else {
+				logger.Error("Failed to download files: %v", err)
+			}
+			time.Sleep(currentInterval)
 			continue
 		}
+
+		// If we successfully got files, try to gradually reduce the interval
+		if currentInterval > client.GetMinInterval() {
+			currentInterval = time.Duration(float64(currentInterval) / gist.BackoffMultiplier)
+			if currentInterval < client.GetMinInterval() {
+				currentInterval = client.GetMinInterval()
+			}
+			logger.Info("Reducing check interval to %v", currentInterval)
+		}
+
 		logger.Debug("Found %d files in Gist", len(files))
 
 		for i := range mappings {
@@ -106,7 +127,7 @@ func watchFiles(client *gist.Client, mappings []FileMapping) {
 			}
 		}
 
-		time.Sleep(watchInterval)
+		time.Sleep(currentInterval)
 	}
 }
 
@@ -159,6 +180,63 @@ func main() {
 		},
 	}
 	cmdClient.Flags().StringVarP(&configFile, "config", "c", "/etc/conf-sync/client.yaml", "Path to client config file")
+
+	var cmdSync = &cobra.Command{
+		Use:   "sync",
+		Short: "Sync files once in client mode",
+		Run: func(cmd *cobra.Command, args []string) {
+			cfg, err := config.LoadClientConfig(configFile)
+			if err != nil {
+				logger.Fatal("Failed to load config: %v", err)
+			}
+
+			client := gist.NewReadOnlyClient(cfg.GistID)
+			files, err := client.DownloadFiles()
+			if err != nil {
+				logger.Fatal("Failed to download files: %v", err)
+			}
+
+			var updated bool
+			for _, m := range cfg.Mappings {
+				file, ok := files[m.GistFile]
+				if !ok {
+					logger.Warn("File %s not found in Gist", m.GistFile)
+					continue
+				}
+
+				// Create parent directories if they don't exist
+				if err := os.MkdirAll(filepath.Dir(m.LocalPath), 0755); err != nil {
+					logger.Error("Failed to create directories for %s: %v", m.LocalPath, err)
+					continue
+				}
+
+				// Write file
+				if err := os.WriteFile(m.LocalPath, file.Content, 0644); err != nil {
+					logger.Error("Failed to write %s: %v", m.LocalPath, err)
+					continue
+				}
+
+				updated = true
+				logger.Info("Successfully updated %s", m.LocalPath)
+
+				// Execute command if specified
+				if m.Exec != "" {
+					logger.Info("Executing command: %s", m.Exec)
+					cmd := exec.Command("sh", "-c", m.Exec)
+					if out, err := cmd.CombinedOutput(); err != nil {
+						logger.Error("Command failed: %v\nOutput: %s", err, out)
+					} else {
+						logger.Info("Command executed successfully")
+					}
+				}
+			}
+
+			if !updated {
+				logger.Info("No files were updated")
+			}
+		},
+	}
+	cmdSync.Flags().StringVarP(&configFile, "config", "c", "/etc/conf-sync/client.yaml", "Path to client config file")
 
 	// Server mode commands
 	var cmdUpload = &cobra.Command{
@@ -242,6 +320,7 @@ func main() {
 
 	// Add commands
 	rootCmd.AddCommand(cmdClient)
+	rootCmd.AddCommand(cmdSync)
 	rootCmd.AddCommand(cmdUpload, cmdList, cmdDelete)
 
 	if err := rootCmd.Execute(); err != nil {
