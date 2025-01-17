@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*' # 触发标签格式为 v1.0.0
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          check-latest: true
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+
+      - name: Build
+        run: make build-all VERSION=${{ env.VERSION }}
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          body: |
+            Release ${{ github.ref_name }}
+            
+            ## Installation
+            
+            ### macOS
+            ```bash
+            # For Intel Mac
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/conf-sync-darwin-amd64 -o conf-sync
+            
+            # For Apple Silicon Mac
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/conf-sync-darwin-arm64 -o conf-sync
+            ```
+            
+            ### Linux
+            ```bash
+            # For x64
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/conf-sync-linux-amd64 -o conf-sync
+            
+            # For ARM64
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/conf-sync-linux-arm64 -o conf-sync
+            ```
+            
+            ### Windows
+            Download the appropriate file for your system:
+            - Windows x64: `conf-sync-windows-amd64.exe`
+            - Windows ARM64: `conf-sync-windows-arm64.exe`
+            
+            After downloading, make the file executable (Linux/macOS):
+            ```bash
+            chmod +x conf-sync
+            ```
+          files: |
+            build/conf-sync-darwin-amd64
+            build/conf-sync-darwin-arm64
+            build/conf-sync-linux-amd64
+            build/conf-sync-linux-arm64
+            build/conf-sync-windows-amd64.exe
+            build/conf-sync-windows-arm64.exe

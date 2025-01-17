@@ -1,0 +1,13 @@
+server:
+  host: localhost
+  port: 8080
+  
+database:
+  host: localhost
+  port: 5432
+  name: myapp
+  user: admin
+  
+logging:
+  level: info
+  file: /var/log/myapp.log
