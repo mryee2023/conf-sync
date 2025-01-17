@@ -13,15 +13,25 @@ type Client struct {
 	gistID string
 }
 
+// NewClient creates a new client with write access (requires token)
 func NewClient(token, gistID string) *Client {
+	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
 	)
-	tc := oauth2.NewClient(context.Background(), ts)
+	tc := oauth2.NewClient(ctx, ts)
 	client := github.NewClient(tc)
 
 	return &Client{
 		client: client,
+		gistID: gistID,
+	}
+}
+
+// NewReadOnlyClient creates a new client with read-only access (no token required)
+func NewReadOnlyClient(gistID string) *Client {
+	return &Client{
+		client: github.NewClient(nil),
 		gistID: gistID,
 	}
 }

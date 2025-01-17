@@ -44,73 +44,69 @@ func executeCommand(cmd string) error {
 	return command.Run()
 }
 
-func watchFiles(client *gist.Client, mappings []FileMapping) error {
-	logger.Info("Watching %d file(s) for changes (check interval: %v)...", len(mappings), watchInterval)
-	if execCommand != "" {
-		logger.Info("Will execute command after updates: %s", execCommand)
-	}
-	
-	// Create a map for quick lookup
-	gistToLocal := make(map[string]string)
-	for _, m := range mappings {
-		gistToLocal[filepath.Base(m.GistFile)] = m.LocalFile
-		logger.Debug("Mapping Gist file '%s' to local file '%s'", m.GistFile, m.LocalFile)
-		// Ensure the local directory exists
-		dir := filepath.Dir(m.LocalFile)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory for %s: %v", m.LocalFile, err)
-		}
-	}
-
-	lastCheck := time.Now()
-	logger.Debug("Starting watch loop at %v", lastCheck)
-	
+func watchFiles(client *gist.Client, mappings []FileMapping) {
+	logger.Info("Starting file watcher...")
 	for {
-		time.Sleep(watchInterval)
-		currentTime := time.Now()
-		logger.Debug("Checking for updates at %v...", currentTime)
-
-		gistFiles, err := client.DownloadFiles()
+		logger.Debug("Checking for updates at %v...", time.Now().UTC())
+		files, err := client.DownloadFiles()
 		if err != nil {
-			logger.Error("Error getting files: %v", err)
+			logger.Error("Failed to download files: %v", err)
+			time.Sleep(watchInterval)
 			continue
 		}
+		logger.Debug("Found %d files in Gist", len(files))
 
-		logger.Debug("Found %d files in Gist", len(gistFiles))
-		hasUpdates := false
-		for gistName, content := range gistFiles {
-			logger.Debug("Checking Gist file: %s (updated at: %v)", gistName, content.UpdatedAt)
-			localPath, exists := gistToLocal[gistName]
-			if !exists {
-				logger.Debug("Skipping file %s as it's not in our watch list", gistName)
+		for i := range mappings {
+			mapping := &mappings[i]
+			file, ok := files[mapping.GistFile]
+			if !ok {
+				logger.Debug("File %s not found in Gist", mapping.GistFile)
 				continue
 			}
 
-			if content.UpdatedAt.After(lastCheck) {
-				if content.IsDeleted {
-					logger.Info("File %s was deleted from Gist", gistName)
-					continue
+			logger.Debug("Checking Gist file: %s (updated at: %v)", mapping.GistFile, file.UpdatedAt)
+
+			// Compare with last modification time
+			if !file.UpdatedAt.After(mapping.LastModify) {
+				logger.Debug("No changes for %s (last update: %v, last modify: %v)",
+					mapping.GistFile, file.UpdatedAt, mapping.LastModify)
+				continue
+			}
+
+			logger.Info("File %s has been updated, downloading...", mapping.GistFile)
+
+			// Create parent directories if they don't exist
+			if err := os.MkdirAll(filepath.Dir(mapping.LocalFile), 0755); err != nil {
+				logger.Error("Failed to create directories for %s: %v", mapping.LocalFile, err)
+				continue
+			}
+
+			// Write file
+			if err := os.WriteFile(mapping.LocalFile, file.Content, 0644); err != nil {
+				logger.Error("Failed to write %s: %v", mapping.LocalFile, err)
+				continue
+			}
+
+			// Update last modification time
+			mapping.LastModify = file.UpdatedAt
+
+			logger.Info("Successfully updated %s", mapping.LocalFile)
+
+			// Execute command if configured
+			for _, m := range mappings {
+				if m.LocalFile == mapping.LocalFile && m.ExecCommand != "" {
+					logger.Info("Executing command: %s", m.ExecCommand)
+					cmd := exec.Command("sh", "-c", m.ExecCommand)
+					if out, err := cmd.CombinedOutput(); err != nil {
+						logger.Error("Command failed: %v\nOutput: %s", err, out)
+					} else {
+						logger.Info("Command executed successfully")
+					}
 				}
-				logger.Info("Changes detected in %s, updating local file %s...", gistName, localPath)
-				if err := writeFile(localPath, content.Content); err != nil {
-					logger.Error("Error writing file %s: %v", localPath, err)
-					continue
-				}
-				logger.Info("Updated %s", localPath)
-				hasUpdates = true
-			} else {
-				logger.Debug("No changes for %s (last update: %v, last check: %v)", 
-					gistName, content.UpdatedAt, lastCheck)
 			}
 		}
 
-		if hasUpdates && execCommand != "" {
-			if err := executeCommand(execCommand); err != nil {
-				logger.Error("Error executing command: %v", err)
-			}
-		}
-
-		lastCheck = currentTime
+		time.Sleep(watchInterval)
 	}
 }
 
@@ -124,10 +120,6 @@ func main() {
 				logger.Fatal("%v", err)
 			}
 			logger.SetLevel(level)
-			
-			if os.Getenv(envGistToken) == "" {
-				logger.Fatal("GitHub token is required. Set GIST_TOKEN environment variable")
-			}
 		},
 	}
 
@@ -148,16 +140,16 @@ func main() {
 				logger.Fatal("Invalid check interval: %v", err)
 			}
 
-			client := gist.NewClient(os.Getenv(envGistToken), cfg.GistID)
+			// Use read-only client for client mode
+			client := gist.NewReadOnlyClient(cfg.GistID)
 			var mappings []FileMapping
 			for _, m := range cfg.Mappings {
 				mappings = append(mappings, FileMapping{
-					GistFile:  m.GistFile,
-					LocalFile: m.LocalPath,
+					GistFile:    m.GistFile,
+					LocalFile:   m.LocalPath,
+					LastModify:  time.Time{}, // Initialize last modification time
+					ExecCommand: m.Exec,
 				})
-				if m.Exec != "" {
-					logger.Info("Will execute '%s' after updating %s", m.Exec, m.LocalPath)
-				}
 			}
 
 			logger.Info("Starting client mode with %d file mappings", len(mappings))
@@ -177,7 +169,11 @@ func main() {
 			if gistID == "" {
 				logger.Fatal("Gist ID is required in server mode")
 			}
-			client := gist.NewClient(os.Getenv(envGistToken), gistID)
+			token := os.Getenv(envGistToken)
+			if token == "" {
+				logger.Fatal("GitHub token is required for server mode. Set GIST_TOKEN environment variable")
+			}
+			client := gist.NewClient(token, gistID)
 			files := make(map[string][]byte)
 			for _, file := range args {
 				content, err := os.ReadFile(file)
@@ -201,7 +197,11 @@ func main() {
 			if gistID == "" {
 				logger.Fatal("Gist ID is required in server mode")
 			}
-			client := gist.NewClient(os.Getenv(envGistToken), gistID)
+			token := os.Getenv(envGistToken)
+			if token == "" {
+				logger.Fatal("GitHub token is required for server mode. Set GIST_TOKEN environment variable")
+			}
+			client := gist.NewClient(token, gistID)
 			files, err := client.DownloadFiles()
 			if err != nil {
 				logger.Fatal("%v", err)
@@ -225,7 +225,11 @@ func main() {
 			if gistID == "" {
 				logger.Fatal("Gist ID is required in server mode")
 			}
-			client := gist.NewClient(os.Getenv(envGistToken), gistID)
+			token := os.Getenv(envGistToken)
+			if token == "" {
+				logger.Fatal("GitHub token is required for server mode. Set GIST_TOKEN environment variable")
+			}
+			client := gist.NewClient(token, gistID)
 			for _, file := range args {
 				if err := client.DeleteFile(filepath.Base(file)); err != nil {
 					logger.Error("Error deleting %s: %v", file, err)
@@ -247,6 +251,8 @@ func main() {
 
 // FileMapping represents a mapping between a Gist file and a local file
 type FileMapping struct {
-	GistFile   string // filename in Gist
-	LocalFile  string // local file path
+	GistFile    string
+	LocalFile   string
+	LastModify  time.Time
+	ExecCommand string // Command to execute after update
 }
