@@ -53,6 +53,75 @@ conf-sync is designed to manage configuration files across multiple servers:
 
 ## Installation
 
+### Option 1: Using Docker
+
+#### Client Installation
+
+1. Create your configuration:
+```bash
+# Create config directory
+sudo mkdir -p /etc/conf-sync
+
+# Create and edit config file
+sudo tee /etc/conf-sync/client.yaml << 'EOF'
+gist_id: "YOUR_GIST_ID"
+check_interval: "60s"
+mappings:
+  - gist_file: "app.conf"
+    local_path: "/etc/myapp/app.conf"
+    exec: "systemctl restart myapp"
+EOF
+```
+
+2. Start using docker-compose:
+```bash
+# Download docker-compose.yml
+mkdir -p ~/conf-sync && cd ~/conf-sync
+curl -O https://raw.githubusercontent.com/mryee2023/conf-sync/main/docker/client/docker-compose.yml
+
+# Edit docker-compose.yml to mount your config directories
+vi docker-compose.yml
+
+# Start the service
+docker-compose up -d
+```
+
+Or using Docker directly:
+```bash
+docker run -d \
+  --name conf-sync-client \
+  --restart unless-stopped \
+  -v /etc/conf-sync/client.yaml:/etc/conf-sync/client.yaml:ro \
+  -v /etc/myapp:/etc/myapp \
+  mryee2023/conf-sync-client:latest
+```
+
+#### Server Installation
+
+1. Start using docker-compose:
+```bash
+# Download docker-compose.yml
+mkdir -p ~/conf-sync && cd ~/conf-sync
+curl -O https://raw.githubusercontent.com/mryee2023/conf-sync/main/docker/server/docker-compose.yml
+
+# Set your GitHub token
+export GIST_TOKEN="your-github-token"
+
+# Start the service
+docker-compose up -d
+```
+
+Or using Docker directly:
+```bash
+docker run -d \
+  --name conf-sync-server \
+  --restart unless-stopped \
+  -e GIST_TOKEN="your-github-token" \
+  mryee2023/conf-sync-server:latest
+```
+
+### Option 2: Using Install Script
+
 ### Server Installation
 ```bash
 # Just copy the binary
@@ -82,6 +151,205 @@ The install script will:
 3. Create systemd service
 4. Create default configuration
 5. Set proper permissions
+
+## Docker Usage
+
+### Client Mode
+
+The client container supports various configurations through docker-compose or command line arguments.
+
+#### Basic Usage
+
+```bash
+# Start the client
+docker run -d \
+  --name conf-sync-client \
+  -v /etc/conf-sync/client.yaml:/etc/conf-sync/client.yaml:ro \
+  mryee2023/conf-sync-client:latest
+
+# View logs
+docker logs -f conf-sync-client
+
+# Manual sync
+docker exec conf-sync-client sync
+```
+
+#### Advanced Configuration
+
+1. With system commands (requires privileged mode):
+```yaml
+# docker-compose.yml
+services:
+  conf-sync-client:
+    image: mryee2023/conf-sync-client:latest
+    volumes:
+      - /etc/conf-sync/client.yaml:/etc/conf-sync/client.yaml:ro
+      - /etc/myapp:/etc/myapp
+    privileged: true
+    restart: unless-stopped
+```
+
+2. With Docker container restart capability:
+```yaml
+services:
+  conf-sync-client:
+    image: mryee2023/conf-sync-client:latest
+    volumes:
+      - /etc/conf-sync/client.yaml:/etc/conf-sync/client.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    privileged: true
+    restart: unless-stopped
+```
+
+3. Multiple configuration directories:
+```yaml
+services:
+  conf-sync-client:
+    image: mryee2023/conf-sync-client:latest
+    volumes:
+      - /etc/conf-sync/client.yaml:/etc/conf-sync/client.yaml:ro
+      - /etc/app1:/etc/app1
+      - /etc/app2:/etc/app2
+      - /var/lib/app3:/var/lib/app3
+    restart: unless-stopped
+```
+
+### Server Mode
+
+The server container provides a simple interface for managing Gist files.
+
+#### Basic Usage
+
+```bash
+# Start the server
+docker run -d \
+  --name conf-sync-server \
+  -e GIST_TOKEN="your-github-token" \
+  mryee2023/conf-sync-server:latest
+
+# Upload files
+docker exec conf-sync-server upload -g YOUR_GIST_ID /path/to/file
+
+# List files
+docker exec conf-sync-server list -g YOUR_GIST_ID
+
+# Delete files
+docker exec conf-sync-server delete -g YOUR_GIST_ID filename
+```
+
+#### With File Mounting
+
+```yaml
+# docker-compose.yml
+services:
+  conf-sync-server:
+    image: mryee2023/conf-sync-server:latest
+    environment:
+      - GIST_TOKEN=${GIST_TOKEN}
+    volumes:
+      - ./configs:/configs
+    restart: unless-stopped
+```
+
+Then use the mounted path:
+```bash
+docker-compose exec conf-sync-server upload -g YOUR_GIST_ID /configs/app.conf
+```
+
+### Building Docker Images
+
+If you want to build the images yourself:
+
+```bash
+# Clone the repository
+git clone https://github.com/mryee2023/conf-sync.git
+cd conf-sync
+
+# Build images
+make docker-build
+
+# Or build specific versions
+make VERSION=2.0.0 docker-build
+
+# Push to registry (requires authentication)
+make docker-push
+```
+
+### Docker Security Notes
+
+1. Client Container:
+   - Runs as non-root user by default
+   - Mount configuration files as read-only
+   - Only use privileged mode when necessary
+   - Consider using read-only root filesystem
+
+2. Server Container:
+   - Runs as non-root user
+   - Protect the GIST_TOKEN environment variable
+   - No need for privileged mode
+   - Mount only necessary directories
+
+3. Network Considerations:
+   - Containers only need outbound access to GitHub
+   - No ports need to be exposed
+   - Can run in isolated networks
+
+### Troubleshooting Docker Deployments
+
+1. Check container status:
+```bash
+docker ps | grep conf-sync
+```
+
+2. View logs:
+```bash
+# Client logs
+docker logs -f conf-sync-client
+
+# Server logs
+docker logs -f conf-sync-server
+```
+
+3. Check mounted volumes:
+```bash
+docker inspect conf-sync-client | grep Mounts -A 20
+```
+
+4. Common issues:
+   - Configuration file not mounted correctly
+   - Insufficient permissions on mounted directories
+   - Missing or invalid GIST_TOKEN
+   - Network connectivity issues to GitHub
+
+## Development
+
+### Docker Hub Release Process
+
+The project automatically builds and publishes Docker images to Docker Hub when a new version tag is pushed. The images are available at:
+
+- Client: [docker.io/mryee2023/conf-sync-client](https://hub.docker.com/r/mryee2023/conf-sync-client)
+- Server: [docker.io/mryee2023/conf-sync-server](https://hub.docker.com/r/mryee2023/conf-sync-server)
+
+To release a new version:
+
+1. Tag the release:
+```bash
+git tag -a v1.0.0 -m "Release version 1.0.0"
+git push origin v1.0.0
+```
+
+2. The GitHub Actions workflow will automatically:
+   - Build multi-arch images (amd64, arm64)
+   - Tag the images with version numbers (e.g., 1.0.0, 1.0, 1, latest)
+   - Push the images to Docker Hub
+
+Available image tags:
+- `latest`: Latest stable release
+- `x.y.z`: Specific version (e.g., `1.0.0`)
+- `x.y`: Minor version (e.g., `1.0`)
+- `x`: Major version (e.g., `1`)
+
+All images are available for both amd64 and arm64 architectures.
 
 ## Configuration
 

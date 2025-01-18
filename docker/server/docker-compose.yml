@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  conf-sync-server:
+    build:
+      context: ../..
+      dockerfile: docker/server/Dockerfile
+    environment:
+      - GIST_TOKEN=${GIST_TOKEN}
+      - TZ=Asia/Shanghai
+    restart: unless-stopped

@@ -32,21 +32,21 @@ case $OS in
         ;;
 esac
 
-# Latest release URL
-RELEASE_URL="https://github.com/mryee2023/conf-sync/releases/latest/download/conf-sync-${OS}-${ARCH}"
+# Latest release URL for client
+RELEASE_URL="https://github.com/mryee2023/conf-sync/releases/latest/download/conf-sync-client-${OS}-${ARCH}"
 
 # Create directories
 mkdir -p /etc/conf-sync
 mkdir -p /usr/local/bin
 
 # Download binary
-echo "Downloading conf-sync binary..."
-curl -L -o /usr/local/bin/conf-sync "$RELEASE_URL"
+echo "Downloading conf-sync client binary..."
+curl -L -o /usr/local/bin/conf-sync "${RELEASE_URL}"
 chmod +x /usr/local/bin/conf-sync
 
 # Create service file
 echo "Creating systemd service file..."
-cat > /etc/systemd/system/conf-sync.service << 'EOL'
+cat > /etc/systemd/system/conf-sync.service << 'EOF'
 [Unit]
 Description=Configuration Synchronization Service
 After=network.target
@@ -54,25 +54,27 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/conf-sync client --config /etc/conf-sync/client.yaml
+ExecStart=/usr/local/bin/conf-sync watch --config /etc/conf-sync/client.yaml
 Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOL
+EOF
 
-# Create default config file
-echo "Creating default configuration file..."
-cat > /etc/conf-sync/client.yaml << 'EOL'
+# Create default config file if it doesn't exist
+if [ ! -f /etc/conf-sync/client.yaml ]; then
+    echo "Creating default configuration file..."
+    cat > /etc/conf-sync/client.yaml << 'EOF'
 # Client configuration for conf-sync
 gist_id: "YOUR_GIST_ID"  # Replace with your Gist ID
-check_interval: "30s"
+check_interval: "60s"    # Minimum interval is 60s for unauthenticated requests
 mappings:
   - gist_file: "app.conf"
     local_path: "/etc/myapp/app.conf"
     exec: "systemctl restart myapp"
-EOL
+EOF
+fi
 
 # Set permissions
 chmod 644 /etc/systemd/system/conf-sync.service

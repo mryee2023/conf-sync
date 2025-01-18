@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  conf-sync-client:
+    build:
+      context: ../..
+      dockerfile: docker/client/Dockerfile
+    volumes:
+      - ../../conf/client.yaml:/etc/conf-sync/client.yaml:ro
+      # Add your application config directories here
+      # - /etc/myapp:/etc/myapp
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+    # If you need to run commands after file updates, you'll need privileged mode
+    # privileged: true
